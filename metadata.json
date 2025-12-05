@@ -1,0 +1,5 @@
+{
+  "name": "DRC Resource & Conflict Monitor",
+  "description": "An interactive dashboard visualizing mineral resources and conflict zones in the Democratic Republic of Congo, powered by Gemini AI for real-time situational analysis.",
+  "requestFramePermissions": []
+}
