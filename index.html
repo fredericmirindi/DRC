@@ -4,6 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>DRC Resource & Conflict Monitor</title>
+    
+    <!-- Styles -->
     <script src="https://cdn.tailwindcss.com"></script>
     <link
       rel="stylesheet"
@@ -12,45 +14,596 @@
       crossorigin=""
     />
     <style>
-      /* Custom scrollbar for dark theme */
-      ::-webkit-scrollbar {
-        width: 8px;
+      ::-webkit-scrollbar { width: 8px; }
+      ::-webkit-scrollbar-track { background: #1f2937; }
+      ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
+      ::-webkit-scrollbar-thumb:hover { background: #6b7280; }
+      .leaflet-popup-content-wrapper { background: #1f2937; color: #f3f4f6; border-radius: 0.5rem; }
+      .leaflet-popup-tip { background: #1f2937; }
+      /* Custom Marker Animation */
+      @keyframes pulse-ring {
+        0% { transform: scale(0.33); }
+        80%, 100% { opacity: 0; }
       }
-      ::-webkit-scrollbar-track {
-        background: #1f2937;
-      }
-      ::-webkit-scrollbar-thumb {
-        background: #4b5563;
-        border-radius: 4px;
-      }
-      ::-webkit-scrollbar-thumb:hover {
-        background: #6b7280;
-      }
-      .leaflet-popup-content-wrapper {
-        background: #1f2937;
-        color: #f3f4f6;
-        border-radius: 0.5rem;
-      }
-      .leaflet-popup-tip {
-        background: #1f2937;
-      }
+      .animate-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
     </style>
-  <script type="importmap">
-{
-  "imports": {
-    "react": "https://aistudiocdn.com/react@^19.2.1",
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.1/",
-    "react/": "https://aistudiocdn.com/react@^19.2.1/",
-    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.31.0",
-    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.555.0",
-    "leaflet": "https://aistudiocdn.com/leaflet@^1.9.4",
-    "react-leaflet": "https://aistudiocdn.com/react-leaflet@^5.0.0"
-  }
-}
-</script>
-</head>
+
+    <!-- Babel for in-browser JSX compilation -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Import Map -->
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "@google/genai": "https://esm.sh/@google/genai@0.1.0",
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+        "leaflet": "https://unpkg.com/leaflet@1.9.4/dist/leaflet-src.esm.js",
+        "react-leaflet": "https://esm.sh/react-leaflet@4.2.1"
+      }
+    }
+    </script>
+  </head>
   <body class="bg-gray-900 text-gray-100 overflow-hidden">
     <div id="root"></div>
-    <script type="module" src="./index.tsx"></script>
+
+    <!-- Polyfill for process.env -->
+    <script>
+      if (typeof process === "undefined") {
+        window.process = { env: { API_KEY: "YOUR_API_KEY_HERE" } };
+      }
+    </script>
+
+    <!-- Main Application Script -->
+    <script type="text/babel" data-type="module">
+      import React, { useState, useEffect, useRef, useMemo } from 'react';
+      import ReactDOM from 'react-dom/client';
+      import { GoogleGenAI } from "@google/genai";
+      import { MapContainer, TileLayer, Marker, Popup, CircleMarker, useMap } from 'react-leaflet';
+      import L from 'leaflet';
+      import { Pickaxe, ShieldAlert, MapPin, AlertTriangle, X, Send, Bot, User, Database, Info, Loader2, Layers, Gem } from 'lucide-react';
+
+      /**
+       * ------------------------------------------------------------------
+       * CONSTANTS & DATA
+       * ------------------------------------------------------------------
+       */
+      const LocationType = {
+        MINERAL: 'MINERAL',
+        CONFLICT: 'CONFLICT',
+        CITY: 'CITY'
+      };
+
+      const MineralType = {
+        COBALT: 'Cobalt',
+        COPPER: 'Copper',
+        GOLD: 'Gold',
+        DIAMOND: 'Diamond',
+        COLTAN: 'Coltan',
+        LITHIUM: 'Lithium'
+      };
+
+      const DRC_CENTER = { lat: -2.98, lng: 23.82 };
+      const DEFAULT_ZOOM = 6;
+      const MAP_TILE_URL = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
+      const MAP_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>';
+
+      const LOCATIONS = [
+        // MINERALS
+        {
+          id: 'm1',
+          name: 'Tenke Fungurume Mine',
+          type: LocationType.MINERAL,
+          mineralType: MineralType.COPPER,
+          description: 'One of the largest copper and cobalt mines in the world. Located in Lualaba Province.',
+          coordinates: { lat: -10.52, lng: 26.13 },
+        },
+        {
+          id: 'm2',
+          name: 'Kibali Gold Mine',
+          type: LocationType.MINERAL,
+          mineralType: MineralType.GOLD,
+          description: 'A large gold mine in the Haute-Uele province, northeast DRC.',
+          coordinates: { lat: 3.12, lng: 29.58 },
+        },
+        {
+          id: 'm3',
+          name: 'Rubaya Coltan Mines',
+          type: LocationType.MINERAL,
+          mineralType: MineralType.COLTAN,
+          description: 'Key coltan mining area in Masisi territory, North Kivu. Strategic importance for electronics.',
+          coordinates: { lat: -1.38, lng: 28.87 },
+        },
+        {
+          id: 'm4',
+          name: 'Mbuji-Mayi Diamond Fields',
+          type: LocationType.MINERAL,
+          mineralType: MineralType.DIAMOND,
+          description: 'Historic diamond mining capital in Kasai-Oriental.',
+          coordinates: { lat: -6.13, lng: 23.60 },
+        },
+        {
+          id: 'm5',
+          name: 'Mutanda Mine',
+          type: LocationType.MINERAL,
+          mineralType: MineralType.COBALT,
+          description: 'Major producer of cobalt and copper, located in Lualaba.',
+          coordinates: { lat: -10.78, lng: 25.80 },
+        },
+        
+        // CONFLICT ZONES
+        {
+          id: 'c1',
+          name: 'Rutshuru Territory Instability',
+          type: LocationType.CONFLICT,
+          description: 'Area of recurring clashes involving M23 rebels and FARDC. High displacement of civilians.',
+          coordinates: { lat: -1.18, lng: 29.45 },
+          severity: 'CRITICAL',
+          updatedAt: '2024-05'
+        },
+        {
+          id: 'c2',
+          name: 'Ituri ADF Activity',
+          type: LocationType.CONFLICT,
+          description: 'Active zone for Allied Democratic Forces (ADF) operations near Beni and Irumu.',
+          coordinates: { lat: 1.50, lng: 29.90 },
+          severity: 'HIGH',
+          updatedAt: '2024-04'
+        },
+        {
+          id: 'c3',
+          name: 'South Kivu Highlands',
+          type: LocationType.CONFLICT,
+          description: 'Presence of various local armed groups (Mai-Mai) disputing resource control.',
+          coordinates: { lat: -3.50, lng: 28.80 },
+          severity: 'MEDIUM',
+          updatedAt: '2024-03'
+        },
+        {
+          id: 'c4',
+          name: 'Kwango Security Incident',
+          type: LocationType.CONFLICT,
+          description: 'Mobondo militia activity reported closer to Kinshasa outskirts.',
+          coordinates: { lat: -4.80, lng: 16.80 },
+          severity: 'MEDIUM',
+          updatedAt: '2024-01'
+        },
+        
+        // CITIES
+        {
+          id: 'city1',
+          name: 'Kinshasa',
+          type: LocationType.CITY,
+          description: 'Capital city of DRC.',
+          coordinates: { lat: -4.44, lng: 15.26 },
+        },
+        {
+          id: 'city2',
+          name: 'Goma',
+          type: LocationType.CITY,
+          description: 'Capital of North Kivu, strategic hub for humanitarian aid and mineral trade.',
+          coordinates: { lat: -1.65, lng: 29.22 },
+        },
+        {
+          id: 'city3',
+          name: 'Lubumbashi',
+          type: LocationType.CITY,
+          description: 'Mining capital in the southeast.',
+          coordinates: { lat: -11.66, lng: 27.47 },
+        }
+      ];
+
+      /**
+       * ------------------------------------------------------------------
+       * SERVICES
+       * ------------------------------------------------------------------
+       */
+      const getClient = () => {
+        const apiKey = process.env.API_KEY;
+        if (!apiKey || apiKey === "YOUR_API_KEY_HERE") {
+          console.warn("API Key is missing or default.");
+        }
+        return new GoogleGenAI({ apiKey: apiKey || '' });
+      };
+
+      const analyzeRegion = async (regionName, context, question) => {
+        try {
+          const ai = getClient();
+          const model = 'gemini-2.5-flash';
+          
+          const prompt = `
+            Context: The user is looking at a map of the Democratic Republic of Congo focusing on mineral resources and conflict zones.
+            Selected Region/Point: ${regionName}
+            Details: ${context}
+            
+            User Question: ${question}
+            
+            Task: Provide a concise, factual situation report. If the query relates to conflict or recent events, use Google Search to find the latest information. 
+            Focus on the relationship between mineral wealth and instability if applicable.
+          `;
+
+          const response = await ai.models.generateContent({
+            model: model,
+            contents: prompt,
+            config: {
+              tools: [{ googleSearch: {} }],
+              systemInstruction: "You are an expert analyst on the DRC, specializing in the geopolitics of mining and conflict.",
+            }
+          });
+
+          const groundingMetadata = response.candidates?.[0]?.groundingMetadata;
+          let text = response.text || "No analysis available.";
+
+          if (groundingMetadata?.groundingChunks) {
+            const sources = groundingMetadata.groundingChunks
+              .map((chunk) => chunk.web?.uri)
+              .filter((uri) => uri)
+              .slice(0, 3);
+            
+            if (sources.length > 0) {
+              text += `\n\nSources:\n${sources.map((s) => `- ${s}`).join('\n')}`;
+            }
+          }
+
+          return text;
+
+        } catch (error) {
+          console.error("Gemini API Error:", error);
+          return "Unable to generate analysis at this time. Please ensure your API key is configured correctly in index.html.";
+        }
+      };
+
+      /**
+       * ------------------------------------------------------------------
+       * COMPONENTS
+       * ------------------------------------------------------------------
+       */
+
+      // --- MapComponent ---
+      
+      // Fix for Leaflet icons
+      delete L.Icon.Default.prototype._getIconUrl;
+      L.Icon.Default.mergeOptions({
+        iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
+        iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
+        shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+      });
+
+      const createCustomIcon = (type, color) => {
+        // We need to render the component to static HTML string for Leaflet DivIcon
+        // Since we are inside the client, we can't easily use ReactDOMServer.renderToString
+        // We will construct the HTML string manually for the icon to keep it simple without extra deps
+        
+        let iconSvg = '';
+        const size = 20;
+        
+        if (type === LocationType.MINERAL) {
+           iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="${color}" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5l-4 4-4-4a2.12 2.12 0 0 1 0-3 2.12 2.12 0 0 1 3 0l1 1 1-1a2.12 2.12 0 0 1 3 0 2.12 2.12 0 0 1 0 3z"/><path d="M8.62 12.38L3 18l4 4 5.62-5.62"/><path d="M10.83 14.58l-1.41-1.41"/></svg>`;
+        } else if (type === LocationType.CONFLICT) {
+           iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="${color}" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>`;
+        } else {
+           iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="${color}" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>`;
+        }
+
+        const pulseClass = type === LocationType.CONFLICT ? 'bg-red-500 animate-pulse' : 'bg-gray-800';
+        
+        const html = `
+          <div class="flex items-center justify-center w-8 h-8 rounded-full border-2 border-white shadow-lg ${pulseClass}">
+            ${iconSvg}
+          </div>
+        `;
+
+        return L.divIcon({
+          html: html,
+          className: 'custom-leaflet-icon',
+          iconSize: [32, 32],
+          iconAnchor: [16, 32],
+          popupAnchor: [0, -32],
+        });
+      };
+
+      const FlyToLocation = ({ location }) => {
+        const map = useMap();
+        useEffect(() => {
+          if (location) {
+            map.flyTo([location.coordinates.lat, location.coordinates.lng], 10, {
+              duration: 1.5
+            });
+          }
+        }, [location, map]);
+        return null;
+      };
+
+      const MapComponent = ({ locations, onLocationSelect, selectedLocation }) => {
+        return (
+          <div className="h-full w-full relative z-0">
+            <MapContainer 
+              center={[DRC_CENTER.lat, DRC_CENTER.lng]} 
+              zoom={DEFAULT_ZOOM} 
+              style={{ height: '100%', width: '100%', background: '#111827' }}
+              zoomControl={false}
+            >
+              <TileLayer attribution={MAP_ATTRIBUTION} url={MAP_TILE_URL} />
+              
+              <FlyToLocation location={selectedLocation} />
+
+              {locations.map((loc) => {
+                let color = '#3b82f6';
+                if (loc.type === LocationType.CONFLICT) color = '#ef4444';
+                if (loc.type === LocationType.MINERAL) color = '#eab308';
+
+                return (
+                  <React.Fragment key={loc.id}>
+                    {loc.type === LocationType.CONFLICT && (
+                      <CircleMarker 
+                        center={[loc.coordinates.lat, loc.coordinates.lng]}
+                        radius={20}
+                        pathOptions={{ color: color, fillColor: color, fillOpacity: 0.2, weight: 1 }}
+                      />
+                    )}
+                    
+                    <Marker 
+                      position={[loc.coordinates.lat, loc.coordinates.lng]}
+                      icon={createCustomIcon(loc.type, color)}
+                      eventHandlers={{
+                        click: () => onLocationSelect(loc),
+                      }}
+                    >
+                      <Popup>
+                        <div className="p-1">
+                          <h3 className="font-bold text-lg mb-1">{loc.name}</h3>
+                          <p className="text-sm text-gray-300 mb-2">{loc.type}</p>
+                          <button 
+                            onClick={() => onLocationSelect(loc)}
+                            className="text-xs bg-blue-600 hover:bg-blue-700 text-white px-2 py-1 rounded w-full"
+                          >
+                            View Details & Analyze
+                          </button>
+                        </div>
+                      </Popup>
+                    </Marker>
+                  </React.Fragment>
+                );
+              })}
+            </MapContainer>
+          </div>
+        );
+      };
+
+      // --- InfoPanel ---
+
+      const InfoPanel = ({ location, onClose }) => {
+        const [messages, setMessages] = useState([]);
+        const [input, setInput] = useState('');
+        const [isLoading, setIsLoading] = useState(false);
+        const messagesEndRef = useRef(null);
+
+        useEffect(() => {
+          setMessages([]);
+          setInput('');
+        }, [location]);
+
+        useEffect(() => {
+          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }, [messages, isLoading]);
+
+        if (!location) return null;
+
+        const handleSend = async () => {
+          if (!input.trim()) return;
+
+          const userMsg = { role: 'user', text: input, timestamp: Date.now() };
+          setMessages(prev => [...prev, userMsg]);
+          setInput('');
+          setIsLoading(true);
+
+          try {
+            const responseText = await analyzeRegion(
+              location.name,
+              location.description,
+              userMsg.text
+            );
+            const aiMsg = { role: 'model', text: responseText, timestamp: Date.now() };
+            setMessages(prev => [...prev, aiMsg]);
+          } catch (err) {
+            const errorMsg = { role: 'model', text: "Error encountered.", timestamp: Date.now(), isError: true };
+            setMessages(prev => [...prev, errorMsg]);
+          } finally {
+            setIsLoading(false);
+          }
+        };
+
+        const handleQuickAction = (action) => {
+          let query = "";
+          switch (action) {
+            case "conflict": query = "Are there recent armed conflicts reported in or near this area?"; break;
+            case "supply_chain": query = "How important is this location to the global supply chain? Are there ethical sourcing concerns?"; break;
+            case "actors": query = "Which companies or armed groups operate in this specific area?"; break;
+          }
+          setInput(query);
+        };
+
+        return (
+          <div className="absolute top-0 right-0 h-full w-full md:w-96 bg-gray-900 border-l border-gray-700 shadow-2xl z-[1000] flex flex-col">
+            <div className="p-4 border-b border-gray-700 flex justify-between items-center bg-gray-800">
+              <div>
+                <h2 className="font-bold text-xl text-white">{location.name}</h2>
+                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                  location.type === LocationType.CONFLICT ? 'bg-red-900 text-red-200' : 
+                  location.type === LocationType.MINERAL ? 'bg-yellow-900 text-yellow-200' : 'bg-gray-700 text-gray-200'
+                }`}>
+                  {location.type} {location.mineralType ? `- ${location.mineralType}` : ''}
+                </span>
+              </div>
+              <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors">
+                <X size={24} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-6">
+              <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
+                <h3 className="text-sm font-semibold text-gray-400 uppercase mb-2 flex items-center gap-2">
+                  <Info size={16} /> Overview
+                </h3>
+                <p className="text-gray-200 text-sm leading-relaxed">{location.description}</p>
+                {location.type === LocationType.CONFLICT && (
+                  <div className="mt-3 flex items-center gap-2 text-red-400 text-sm font-bold bg-red-900/20 p-2 rounded">
+                    <AlertTriangle size={16} /> Severity: {location.severity}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-col h-[400px] bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+                <div className="p-3 bg-gray-750 border-b border-gray-700 flex items-center justify-between">
+                  <span className="text-sm font-semibold text-blue-400 flex items-center gap-2">
+                    <Bot size={16} /> Intelligence Analyst
+                  </span>
+                  <span className="text-xs text-gray-500">Gemini 2.5 Flash</span>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-3 space-y-3 bg-gray-900/50">
+                   {messages.length === 0 && (
+                     <div className="text-center mt-10 opacity-50">
+                       <Database size={32} className="mx-auto mb-2 text-gray-500" />
+                       <p className="text-sm text-gray-400">Ask for a live situation report.</p>
+                     </div>
+                   )}
+                   
+                   {messages.map((msg, idx) => (
+                     <div key={idx} className={`flex gap-2 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
+                       <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
+                         msg.role === 'user' ? 'bg-blue-600' : 'bg-emerald-600'
+                       }`}>
+                         {msg.role === 'user' ? <User size={16} /> : <Bot size={16} />}
+                       </div>
+                       <div className={`rounded-lg p-3 text-sm max-w-[85%] ${
+                         msg.role === 'user' ? 'bg-blue-600/20 text-blue-100' : 'bg-gray-700 text-gray-100'
+                       }`}>
+                         <p className="whitespace-pre-wrap">{msg.text}</p>
+                       </div>
+                     </div>
+                   ))}
+                   
+                   {isLoading && (
+                     <div className="flex gap-2">
+                       <div className="w-8 h-8 rounded-full bg-emerald-600 flex items-center justify-center shrink-0 animate-pulse">
+                          <Bot size={16} />
+                       </div>
+                       <div className="bg-gray-700 rounded-lg p-3 flex items-center">
+                          <Loader2 size={16} className="animate-spin text-gray-400" />
+                       </div>
+                     </div>
+                   )}
+                   <div ref={messagesEndRef} />
+                </div>
+
+                {messages.length === 0 && (
+                   <div className="px-3 py-2 flex gap-2 overflow-x-auto border-t border-gray-700 bg-gray-800">
+                     <button onClick={() => handleQuickAction('conflict')} className="whitespace-nowrap px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded-full text-xs text-gray-300 transition">Conflict Update</button>
+                     <button onClick={() => handleQuickAction('supply_chain')} className="whitespace-nowrap px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded-full text-xs text-gray-300 transition">Supply Chain</button>
+                     <button onClick={() => handleQuickAction('actors')} className="whitespace-nowrap px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded-full text-xs text-gray-300 transition">Key Actors</button>
+                   </div>
+                )}
+
+                <div className="p-3 bg-gray-800 border-t border-gray-700">
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={input}
+                      onChange={(e) => setInput(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+                      placeholder="Ask about this region..."
+                      className="flex-1 bg-gray-900 border border-gray-600 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 placeholder-gray-500"
+                      disabled={isLoading}
+                    />
+                    <button 
+                      onClick={handleSend}
+                      disabled={isLoading || !input.trim()}
+                      className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white p-2 rounded-md transition-colors"
+                    >
+                      <Send size={18} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      // --- Main App ---
+
+      const App = () => {
+        const [selectedLocation, setSelectedLocation] = useState(null);
+        const [filterType, setFilterType] = useState('ALL');
+
+        const filteredLocations = useMemo(() => {
+          if (filterType === 'ALL') return LOCATIONS;
+          return LOCATIONS.filter(loc => loc.type === filterType);
+        }, [filterType]);
+
+        const stats = useMemo(() => {
+          const conflicts = LOCATIONS.filter(l => l.type === LocationType.CONFLICT).length;
+          const minerals = LOCATIONS.filter(l => l.type === LocationType.MINERAL).length;
+          return { conflicts, minerals };
+        }, []);
+
+        return (
+          <div className="h-screen w-screen flex overflow-hidden bg-gray-900 text-gray-100 font-sans">
+            <div className={`absolute top-4 left-4 z-[500] flex flex-col gap-4 max-w-xs transition-opacity duration-300 ${selectedLocation ? 'opacity-0 md:opacity-100 pointer-events-none md:pointer-events-auto' : 'opacity-100'}`}>
+              <div className="bg-gray-800/90 backdrop-blur border border-gray-700 p-4 rounded-xl shadow-xl pointer-events-auto">
+                <h1 className="text-xl font-bold bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent mb-1">
+                  DRC Monitor
+                </h1>
+                <p className="text-xs text-gray-400">Resource & Conflict Intelligence</p>
+                <div className="mt-4 flex gap-4 text-sm">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
+                    <span className="text-gray-300">{stats.conflicts} Conflict Zones</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-yellow-500"></span>
+                    <span className="text-gray-300">{stats.minerals} Mines</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-gray-800/90 backdrop-blur border border-gray-700 p-2 rounded-xl shadow-xl pointer-events-auto">
+                <div className="flex flex-col gap-1">
+                  <button onClick={() => setFilterType('ALL')} className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all ${filterType === 'ALL' ? 'bg-blue-600/20 text-blue-400 border border-blue-600/30' : 'hover:bg-gray-700 text-gray-400'}`}>
+                    <Layers size={18} /> All Layers
+                  </button>
+                  <button onClick={() => setFilterType(LocationType.CONFLICT)} className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all ${filterType === LocationType.CONFLICT ? 'bg-red-600/20 text-red-400 border border-red-600/30' : 'hover:bg-gray-700 text-gray-400'}`}>
+                    <AlertTriangle size={18} /> Conflict Zones
+                  </button>
+                  <button onClick={() => setFilterType(LocationType.MINERAL)} className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all ${filterType === LocationType.MINERAL ? 'bg-yellow-600/20 text-yellow-400 border border-yellow-600/30' : 'hover:bg-gray-700 text-gray-400'}`}>
+                    <Gem size={18} /> Mineral Resources
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex-1 relative">
+              <MapComponent 
+                locations={filteredLocations} 
+                onLocationSelect={setSelectedLocation}
+                selectedLocation={selectedLocation}
+              />
+            </div>
+
+            <div className={`absolute top-0 right-0 h-full transition-transform duration-300 z-[1000] ${selectedLocation ? 'translate-x-0' : 'translate-x-full'}`}>
+              <InfoPanel 
+                location={selectedLocation} 
+                onClose={() => setSelectedLocation(null)} 
+              />
+            </div>
+          </div>
+        );
+      };
+
+      const root = ReactDOM.createRoot(document.getElementById('root'));
+      root.render(<App />);
+    </script>
   </body>
 </html>
